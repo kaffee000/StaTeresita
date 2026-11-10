@@ -42,7 +42,7 @@ const Index = () => {
       setLoading(false)
     } else {
       setLoading(false)
-      router.replace('./(tabs)/home');
+      router.replace('/home');
 
     }
 

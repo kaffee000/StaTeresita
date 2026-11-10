@@ -63,7 +63,7 @@ export default function TabLayout() {
       }}
     >
       <Tabs.Screen
-        name="home/index"
+        name="home"
         options={{
           title: "",
           tabBarIcon: ({ color }) => (
@@ -73,7 +73,7 @@ export default function TabLayout() {
       />
 
       <Tabs.Screen
-        name="home/clientes"
+        name="clientes"
         options={{
           title: "",
           tabBarIcon: ({ color }) => (
@@ -83,7 +83,7 @@ export default function TabLayout() {
       />
 
       <Tabs.Screen
-        name="home/registrar-cliente"
+        name="registrar-cliente"
         options={{
           title: "",
           tabBarIcon: ({ color }) => (
@@ -93,7 +93,7 @@ export default function TabLayout() {
       />
 
       <Tabs.Screen
-        name="home/registrar-venta"
+        name="registrar-venta"
         options={{
           title: "",
           tabBarIcon: ({ color }) => (
@@ -102,21 +102,21 @@ export default function TabLayout() {
         }}
       />
 
-      {/* Solicitudes de descuento: Visible SOLAMENTE para el gerente/administrador */}
-      {soyGerente && (
-        <Tabs.Screen
-          name="home/solicitudes-descuento"
-          options={{
-            title: "",
-            tabBarIcon: ({ color }) => (
-              <Ionicons name="pricetag-outline" size={24} color={color} />
-            ),
-          }}
-        />
-      )}
+      {/* Solicitudes de descuento: visible SOLAMENTE para el gerente/administrador.
+          Se oculta con href: null (si no se renderiza, Expo Router la agrega igual como pestaña). */}
+      <Tabs.Screen
+        name="solicitudes-descuento"
+        options={{
+          title: "",
+          href: soyGerente ? undefined : null,
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="pricetag-outline" size={24} color={color} />
+          ),
+        }}
+      />
 
       <Tabs.Screen
-        name="home/ver-historial"
+        name="ver-historial"
         options={{
           title: "",
           tabBarIcon: ({ color }) => (
