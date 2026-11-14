@@ -4,7 +4,9 @@ import { clp } from "@/lib/format";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import MapaClientes from "@/components/MapaClientes";
+import type { UbicacionMapa } from "@/components/mapaClientes.types";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Pressable,
@@ -13,18 +15,19 @@ import {
   Text,
   View,
 } from "react-native";
-import MapView, { Marker } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 interface PuntoMapa {
-  id: string;
+  direccion_id: string; // varios clientes pueden compartir la misma dirección
   cliente_id: string;
-  calle: string | null;
-  numero: string | null;
-  ciudad: string | null;
+  direccion: string; // texto armado: calle número, pasaje, sector, comuna
   latitud: number;
   longitud: number;
 }
+
+// Supabase devuelve las relaciones a-uno como objeto (o arreglo según la versión del cliente)
+const uno = <T,>(v: T | T[] | null | undefined): T | null =>
+  Array.isArray(v) ? (v[0] ?? null) : (v ?? null);
 
 interface ClienteFila {
   id: string;
@@ -40,7 +43,6 @@ const HomeScreen = () => {
   const [clientes, setClientes] = useState<ClienteFila[]>([]);
   const [deudas, setDeudas] = useState<Record<string, number>>({});
   const [puntos, setPuntos] = useState<PuntoMapa[]>([]);
-  const mapRef = useRef<MapView>(null);
   const [, setTick] = useState(0);
   const soyGerente = esGerente(rolUsuario);
 
@@ -77,12 +79,15 @@ const HomeScreen = () => {
           .from("ventas_pedidos")
           .select("cliente_id, saldo_pendiente")
           .gt("saldo_pendiente", 0);
-        // Direcciones que tienen coordenadas calculadas (latitud/longitud)
+        // Dirección de cada cliente (clientes.direccion_id -> direcciones) con sus
+        // coordenadas y los nombres de calle, pasaje, sector y comuna
         const { data: ds, error: errorDirecciones } = await supabase
-          .from("direcciones")
-          .select("id, cliente_id, calle, numero, ciudad, latitud, longitud")
-          .not("latitud", "is", null)
-          .not("longitud", "is", null);
+          .from("clientes")
+          .select(
+            "id, direcciones!clientes_direccion_id_fkey!inner(id, numero, latitud, longitud, calles(nombre), pasajes(nombre), sectores(nombre, comunas(nombre)))",
+          )
+          .not("direcciones.latitud", "is", null)
+          .not("direcciones.longitud", "is", null);
         if (errorDirecciones) {
           console.warn("Error al cargar direcciones:", errorDirecciones);
         }
@@ -96,11 +101,27 @@ const HomeScreen = () => {
         setDeudas(mapa);
         setPuntos(
           ((ds as any[]) || [])
-            .map((d) => ({
-              ...d,
-              latitud: Number(d.latitud),
-              longitud: Number(d.longitud),
-            }))
+            .map((c): PuntoMapa | null => {
+              const d = uno<any>(c.direcciones);
+              if (!d) return null;
+              const sector = uno<any>(d.sectores);
+              const direccion = [
+                [uno<any>(d.calles)?.nombre, d.numero].filter(Boolean).join(" "),
+                uno<any>(d.pasajes)?.nombre,
+                sector?.nombre,
+                uno<any>(sector?.comunas)?.nombre,
+              ]
+                .filter(Boolean)
+                .join(", ");
+              return {
+                direccion_id: d.id,
+                cliente_id: c.id,
+                direccion,
+                latitud: Number(d.latitud),
+                longitud: Number(d.longitud),
+              };
+            })
+            .filter((d): d is PuntoMapa => d !== null)
             .filter(
               (d) => Number.isFinite(d.latitud) && Number.isFinite(d.longitud),
             ),
@@ -135,21 +156,27 @@ const HomeScreen = () => {
   const nombrePorCliente: Record<string, string> = {};
   clientes.forEach((c) => (nombrePorCliente[c.id] = c.nombre));
 
-  // Ajustar el mapa para que se vean todos los puntos de los clientes
-  const encuadrarPuntos = useCallback(() => {
-    if (!puntos.length || !mapRef.current) return;
-    mapRef.current.fitToCoordinates(
-      puntos.map((p) => ({ latitude: p.latitud, longitude: p.longitud })),
-      {
-        edgePadding: { top: 40, right: 40, bottom: 40, left: 40 },
-        animated: true,
-      },
-    );
-  }, [puntos]);
-
-  useEffect(() => {
-    encuadrarPuntos();
-  }, [encuadrarPuntos]);
+  // Un punto por dirección con latitud/longitud guardadas; si varios clientes
+  // viven en la misma casa se muestran juntos en el mismo marcador.
+  const ubicaciones = useMemo<UbicacionMapa[]>(() => {
+    const porDireccion: Record<string, UbicacionMapa> = {};
+    puntos.forEach((p) => {
+      const u = (porDireccion[p.direccion_id] ??= {
+        id: p.direccion_id,
+        latitud: p.latitud,
+        longitud: p.longitud,
+        direccion: p.direccion,
+        clientes: [],
+      });
+      u.clientes.push({
+        id: p.cliente_id,
+        nombre: nombrePorCliente[p.cliente_id] ?? "Cliente",
+        deuda: deudas[p.cliente_id] || 0,
+      });
+    });
+    return Object.values(porDireccion);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [puntos, clientes, deudas]);
 
   const conDeuda = clientes.filter((c) => (deudas[c.id] || 0) > 0).length;
   const totalPorCobrar = (Object.values(deudas) as number[]).reduce(
@@ -415,51 +442,17 @@ const HomeScreen = () => {
 
           {/* --- MAPA: un marcador por cada dirección con latitud/longitud --- */}
           <View style={styles.mapContainer}>
-            <MapView
-              ref={mapRef}
-              style={styles.map}
-              initialRegion={{
-                latitude: -35.6975, // Centro de Colbún
-                longitude: -71.4214,
-                latitudeDelta: 0.05,
-                longitudeDelta: 0.05,
-              }}
-              onMapReady={encuadrarPuntos}
-              onLongPress={(e) => {
-                const coords = e.nativeEvent.coordinate;
-                Alert.alert(
-                  "Punto seleccionado",
-                  `Lat: ${coords.latitude.toFixed(4)}, Lng: ${coords.longitude.toFixed(4)}`,
-                );
-              }}
-            >
-              {puntos.map((p) => {
-                const deuda = deudas[p.cliente_id] || 0;
-                const direccion = [
-                  [p.calle, p.numero].filter(Boolean).join(" "),
-                  p.ciudad,
-                ]
-                  .filter(Boolean)
-                  .join(", ");
-                return (
-                  <Marker
-                    key={p.id}
-                    coordinate={{ latitude: p.latitud, longitude: p.longitud }}
-                    title={nombrePorCliente[p.cliente_id] ?? "Cliente"}
-                    description={
-                      deuda > 0
-                        ? `${direccion} · Debe ${clp(deuda)}`
-                        : `${direccion} · Al día`
-                    }
-                    pinColor={deuda > 0 ? Palette.amber : Palette.green}
-                  />
-                );
-              })}
-            </MapView>
+            <MapaClientes
+              ubicaciones={ubicaciones}
+              onPressCliente={(id) => router.push(`/cliente/${id}`)}
+            />
           </View>
           <Text style={styles.mapHint}>
             {puntos.length
-              ? `${puntos.length} ${puntos.length === 1 ? "dirección" : "direcciones"} con ubicación`
+              ? `${puntos.length} de ${clientes.length} ${clientes.length === 1 ? "cliente" : "clientes"} con ubicación` +
+                (ubicaciones.length < puntos.length
+                  ? ` (${ubicaciones.length} ${ubicaciones.length === 1 ? "punto" : "puntos"} en el mapa)`
+                  : "")
               : "Ningún cliente tiene ubicación guardada todavía."}
           </Text>
           {/* --- FIN DEL MAPA --- */}
